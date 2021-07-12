@@ -1,0 +1,329 @@
+---
+title: "Incident analysis based on MITRE standards"
+author: "Marc Santasusagna"
+date: "11/06/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introducción
+
+Com a membre de l'equip de CYBERSEGURETAT i expert en data science, es sol·licita
+la teva col·laboració per a l'anàlisi d'un conjunt d'incidents de seguretat afegint
+informació de context, de manera que pugui ajudar a entendre que va succeir i com millorar.
+
+## Objetivo
+
+L'objectiu de la present pràctica és realitzar un estudi d'un seguit d'incidents que s'han identificat en diferents empreses per poder determinar qui els ha produït així com investigar de quina manera s'han pogut realitzar per a futures prevencions. 
+
+Per tal de poder dur a terme aquest estudi, s'han proporcionat un grup de datasets. D'una banda, es posseeix la informació dels incidents a estudiar i, de l'altra, la informació d'un seguit d'estàndards que ens ajudaran a comprendre i posar en context tals incidents per finalment, extraure un seguit de conclusions.
+
+S'han seguit els següents passos per tal d'obtenir l'entorn preparat i començar l'anàlisi del conjunt d'incidents:
+*  1. En primer lloc, s'ha descarregat tot el respositori de github: https://github.com/humbertcostas/DDSreport i s'ha descomprimit el contingut en una carpeta al local.
+*  2. S'hauria d'haver obert un projecte (.rproj) nou a RStudio però en aquest cas s'utilitzarà la plantilla de la pràctica amb extensió rmd, que posteriorment es publicarà en format HTML.
+*  3. Importar els diferents conjunts de dades (datasets) que es localitzen dins de la carpeta data-raw.
+*  4. En aquest punt, un cop es normalitzin i sanegin les ades, ja es pot començar a fer l'anàlisi de d'aquestes i extreure conclusions.
+
+# Data sets
+
+```{r data sets,include=TRUE}
+raw_incidents <- readRDS(file = "data/incidents.rds")
+source("data-raw/mitre-cwe.R")
+source("data-raw/nist-cve.R")
+source("data-raw/mitre-attck.R")
+source("data-raw/mitre-shield.R")
+source("data-raw/mitre-car.R")
+```
+
+# Packages
+
+```{r load_packages}
+suppressPackageStartupMessages(library("dplyr"))
+library("tidyr")
+suppressPackageStartupMessages(library("DataExplorer"))
+library("ggridges")
+library("ggplot2")
+suppressPackageStartupMessages(library("hrbrthemes"))
+suppressPackageStartupMessages(library("viridis"))
+library(knitr)
+library(markdown)
+```
+
+## 1. Anàlisi inicial dataset incidents
+
+Per començar, es realitza un anàlisi inicial del nostre dataset d'incidents per tal de veure quin tipus d'informació s'està treballant. Mitjançant funció summary() es pot veure un recull estadístic inicial del dataset d'incidents. No obstant, prèviament s'han de normalitzar les dades del dataset:
+* 1. S'extrauen les tres columnes de mitre_attack i s'engloben dins del dataframe incidents per treballar en un mateix dataframe o conjunt de dades.
+* 2. S'enumeren els valors únics per grup en el dataset i les columnes que presenten informació en forma de matriu, es transformen en dataset per poder treballar en les mateixes condicions.
+* 3. Es converteixen totes les columnes de caràcters en factors.
+
+```{r ds_incidents}
+incidents <- readRDS(file = "data/incidents.rds")
+incidents <- incidents %>% unnest(mitre_attack); 
+apply(incidents, 2, function(x) length(unique(x)))
+incidents <- incidents %>%
+  mutate_if(is.character, as.factor)
+#S'eliminen els dulpicats
+incidents_final <- dplyr::distinct(incidents);
+
+summary(incidents_final)
+```
+Aquí ja podem extreure dades interessants, com que la tàctica més utilitzada és **Execution** seguidament de **Inicial Access** o que el sector més afectat és el de **Manufacturing** tal i com es mostra a continuació: 
+
+```{r ds_incidents_bytactic}
+incidents_bytactic <- table(incidents_final$tactic)
+bytactic <- as.data.frame(incidents_bytactic) %>%
+arrange(desc(Freq)); 
+
+colnames(bytactic) <- c("Tactiques", "Freqüència")
+
+p <- ggplot(bytactic, aes(x=Tactiques, y=Freqüència)) +
+  geom_bar(stat = "identity", fill="steelblue") +
+  ggtitle("Nº of incidents by tactic") +
+  xlab("Tactic") + ylab("Frequency")
+p + theme() +
+coord_flip() +
+  theme_ipsum() +
+  theme(axis.title.y = element_blank())+ 
+  theme(axis.title.x =  element_text(angle = 0, hjust = 0.5))
+```
+```{r ds_incidents_byind}
+incidents_byind <- table(incidents_final$industry)
+byind <- as.data.frame(incidents_byind) %>%
+arrange(desc(Freq));
+
+ggplot(byind, aes(x=Var1, y=Freq)) +
+  geom_bar(stat = "identity", fill="steelblue") +
+  ggtitle("Nº of incidents by industry") +
+  xlab("Dose (mg)") + ylab("Teeth length") +
+  coord_flip() + 
+  theme_ipsum() +
+  theme(axis.title.x = element_blank())+ 
+  theme(axis.title.y = element_blank())
+```
+<br>
+
+Concretament, s'observa que els sectors que han patit més atacs són ***Manufacturing***, ***Finance*** i ***Professional***.
+<br>
+## 2. ¿Quants incidents estan relacionats amb phishing?
+
+Es realitza el gràfic on es mostren totes les tècniques utilitzades i la seva freqüència. **Un cop s'ha normalitzat el dataset d'incidents i s'han eliminat els duplicats, el número total d'incidents relacionats amb phishing s'eleva a 55.**. No obstant, s'observa que la tècnica més utilizada amb diferencia és **Third-Party Software ** representant quasi el 28% del total de la mostra. Les 4 tècniques següents (per ordre de freqüència): **Valid Accounts**, **PowerShell**, **Spearphishing** i **User Execution** representen, en conjunt, el 51% de tècniques més utilitzades. La resta, suposa un percentatge molt baix (entre el 1-4% del total).
+
+```{r ds_incidents_tècniques}
+incidents_techniques <- incidents_final %>%
+  count(technique) %>%
+ arrange(desc(n))
+
+incidents_phishing<-ggplot(data=incidents_techniques, aes(x=n, y=technique)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  ggtitle("Nº tècniques empleades") +
+  xlab("Freqüència (n)") + ylab("Tècniques empleades") +
+  theme_minimal()
+
+
+incidents_phishing
+```
+
+També es pot relacionar el top 5 de tècniques més utilitzades pels ciberdelinqüents amb la seva **tècnica id**, tal com mostra el gràfic següent. Així doncs, el present estudi es centrarà en aquestes 5 de tècniques: **T1072**, **T1078**, **T1086**, **T1192** i **T1204**.
+
+```{r incidents_Top 5 tècniques id}
+incidents_techniques_id <- incidents_final %>%
+  select(id, technique) %>%
+  count(id) %>%
+   arrange(desc(n)) %>%
+  head(5); 
+
+library(ggplot2)
+ggplot(incidents_techniques_id,aes(x=id,y=n))+
+  geom_bar(stat = "identity",
+           fill="steelblue")+
+    ggtitle("Top 5 tècniques més utilitzades") +
+    geom_text(aes(label=n),
+    position=position_stack(vjust=0.8),color="white",size=3)+
+    coord_polar(theta = "y")
+
+```
+<br>
+*Actualització: Per manca de temps i per les posteriors relacions establertes, l'estudi es centrarà en les dues tècniques més freqüents dels atacs dels ciberdelinqüents: T1072 i T1078*.
+<br>
+## 3. ¿Quins estàndards podrien afegir context als incidents?
+
+#### CWE
+<br>
+El CWE és un conjunt unificat i mesurable de vulnerabilitats de software, principalment relacionades amb l’arquitectura i el disseny, que permet la discussió, descripció i enumeració d'aquestes així com també els errors de codificació i disseny de baix nivell
+```{r cwe,include=TRUE}
+raw_cwes <- bind_rows(cwe.weaknesses, cwe.categories, cwe.views)
+cwe_1 <- raw_cwes %>% 
+  select(ID, Abstraction, Structure, Status, CWE_Type, Code_Standard, Likelihood_Of_Exploit, Potential_Mitigations, Detection_Methods) %>% 
+#sapply(cwe_1, function(x) sum(is.na(x)))
+na.omit; 
+```
+S'observa una columna interessant, la de la probabilitat (alta, mitjana o baixa) que una vulnerabilitat sigui explotada. Així, s'agrupa el nombre total de vulnerabilitats en les seves diferents probabilitats a ser explotades. El resultat s'emmagatzema a un nou dataset: *cwe_2*.
+```{r cwe_2, include=TRUE}
+cwe_2 <- cwe_1 %>%
+  group_by(Likelihood_Of_Exploit) %>%
+  summarise(nº = n()); 
+```
+Finalment, es procedeix a visualitzar les dades resultants en el següent gràfic:
+```{r Cwe_plot, include=TRUE}
+df_cwe_plot <-ggplot(cwe_2, aes(x=Likelihood_Of_Exploit, y=nº)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  ggtitle("Nº de vulnerabilitats i la probabilitat a ser explotades") +
+  xlab("Probabilitat d'explotació") + ylab("Freqüència (n)") +
+  theme_minimal()
+df_cwe_plot
+```
+El gràfic mostra que de les 51 vulnerabilitats observades, **36 tenen una probabilitat alta a ser explotades, 14 tenen una probabilitat mitjana i solament 1 presenta una probabilitat baixa a ser explotada**.
+<br>
+####CVE
+<br>
+La missió de el Programa CVE® és identificar, definir i catalogar les vulnerabilitats de ciberseguretat divulgades públicament. Hi ha un registre CVE per a cada vulnerabilitat en el catàleg. Les vulnerabilitats són descobertes i posteriorment assignades i publicades per organitzacions de tot el món que s'han associat amb el Programa CVE.
+
+```{r cve, include=TRUE}
+df_cves <-  cve.nist %>%
+  group_by(cvss2.vector, cvss2.score) %>%
+  summarise(nº=n()) %>%
+  na.exclude
+
+df_cves1 <- tidyr::separate(df_cves, cvss2.vector, c("value_1", "value_2", "value_3", "value_4", "value_5", "value_6"), "/")
+```
+A continuació es visualitza un gràfic mostrant el nombre de vulnerabilitats i la seva puntuació.
+<br>
+```{r cve_plot, include=TRUE}
+df_cves_plot1 <- ggplot(df_cves, aes(x=cvss2.score, y=nº)) +
+  geom_point(stat="identity", fill="steelblue") +
+  ggtitle ("Nº de vulnerabilitats i la seva puntuació") +
+  xlab("Puntuació (cvss2.score)") + ylab("Freqüència (n)") +
+  theme_minimal()
+  
+print(df_cves_plot1)
+
+```
+*Nota: S'han relacionat els estàndards CWE i CVE amb el dataset d'incidents. No obstant, aquests dos dataframe s'interrelacionen amb les tècniques d'ATT$CK, on podria ser interessant l'anàlisi d'aquesta relació.*
+
+```{r ATT&CK, include=TRUE}
+id_attck.techniques<- dplyr::select(attck.techniques,external_id, name, description)
+id_attck.techniques.filter1 <- id_attck.techniques %>%
+  filter(external_id == "T1072" | external_id == "T1078"); 
+
+id_attck.relations<- select(attck.relations,from, to )
+id_attck.relations.filter1<- filter(id_attck.relations, id_attck.relations$to == "T1072" | id_attck.relations$to == "T1078")
+```
+A la següent taula s'observen totes relacions del dataset *Mitre ATT$CK* amb les dues tècniques d'estudi: **T1072** i **T1078**. Mitjançant els datasets de tècniques i relacions del estàndard de Mitre ATT&CK es pot extraure les diverses relacions, de manera global, amb les dues tècniques d'estudi:  
+* 1. ***T1072***: Aquesta tècnica presenta relació amb el dataset del grup d'atacants(attck.groups), amb el de software (attck.software) i amb el de mitigacions (attck.mitigations).  
+* 2. ***T1078***: questa tècnica presenta relació amb el dataset del grup d'atacants(attck.groups), amb el de software (attck.software), amb el de mitigacions (attck.mitigations) i també amb el de subtècniques (attck.techniques).
+<br>
+
+```{r AATT&CK_relations, include=FALSE}
+colnames(id_attck.relations.filter1) <- c("Relaciones Mitre_ATT$CK", "Tècniques")
+library(kableExtra)
+  kbl(id_attck.relations.filter1) %>%
+  kable_classic_2(full_width = F)
+```
+## 4. ¿Qui està darrera els atacs?
+
+En primer lloc, per poder veure qui ha realitzat els atacs, s'estudien els grups que estàn relacionats amb les tècniques d'estudi. S'obtenen els diversos grups ciberdelinqüents a través *d'ATT&CK Groups*. Posteriorment es seleccionen els grups ciberdelinqüents que han utilitzat les tècniques **T1072** i **T1078** mitjançant dataset *d'ATT&CK techniques*. Els resultats es mostren a la taula a continuació:
+<br>
+
+```{r ATT&CK_ Groups, include=TRUE}
+attck.techniques.from<- dplyr::select(attck.relations, from, to)
+attck.techniques.filter1 <- attck.techniques.from %>%
+filter(attck.techniques.from$to == "T1072" | attck.techniques.from$to == "T1078") 
+
+attck.techniques.filter2 <- filter(attck.techniques.filter1, startsWith(as.character(attck.techniques.filter1$from), "G"))
+
+attck.techniques.count <- attck.techniques.filter2 %>%
+  count(to)
+attck.groups.from <- dplyr::select(attck.groups, external_id, name, description)
+colnames(attck.techniques.filter2) <- c("external_id", "Tècniques")
+
+attck.merge<-merge(x=attck.groups.from,y=attck.techniques.filter2,by="external_id",all.x=TRUE)
+attck.merge <- na.omit(attck.merge)
+```
+
+```{r ATT&CK_ Groups.table, include=FALSE}
+colnames(attck.merge) <- c(" Mitre_ATT$CK Org", "Nom Org.", "Descripció", "Tècnica utilitzada")
+library(kableExtra)
+```
+
+```{r ATT&CK_ Groups.showtable, include=TRUE}
+kbl(attck.merge) %>%
+  kable_classic_2(full_width = F)
+```
+
+## 5. Com es varen realitzar els atacs?
+S'estudien les *tàctiques* utilitzades dins **d'ATT$CK** i es filtren per les dues tècniques d'estudi *T1072* i *T1078*:
+<br>
+```{r ATT&CK_tactics, include=TRUE}
+attck.tactics.how<- dplyr::select(attck.tactics, name, description, external_id)
+attck.tactics.how.filter<- filter(attck.tactics.how, attck.tactics.how$name == "Execution" | attck.tactics.how$name == "Lateral Movement"| attck.tactics.how$name == "Defense Evasion" | attck.tactics.how$name == "Persistence" | attck.tactics.how$name == "Privilege Escalation," | attck.tactics.how$name == "Initial Access")
+```
+A continuació, es mostra una taula on s'observen en què consisteixen cada una de les tàctiques utilitzades.
+```{r ATT&CK_techniques.table, include=TRUE}
+library(kableExtra)
+  kbl(attck.tactics.how) %>%
+  kable_classic_2(full_width = F)
+```
+## 6. ¿Quin era el seu objectiu?
+Mitjançant les tècniques trobades al dataset de l'estàndard **CAR**, s'extrauen els camps necessaris per a posteriorment confeccionar la taula on es mostrin els objectius juntament amb una descripció de cada un dels casos relacionat amb les dues tècniques d'estudi:
+
+```{r CAR, include=TRUE}
+car.coverage<- dplyr::select(car.coverage, from, to)
+car.coverage<- filter(car.coverage, car.coverage$to == "T1072" | car.coverage$to == "T1078")
+colnames(car.coverage)[which(names(car.coverage) == "from")] <- "id"
+colnames(car.coverage)[which(names(car.coverage) == "Mitre.id Org_attck")] <- "Tècniques utilitzades"
+
+car.analytics <- dplyr::select(car.analytics, id, title, description)
+
+car.merge<-merge(x=car.coverage,y=car.analytics,by="id",all.x=TRUE)
+car.merge = car.merge [ , c(1,3,4,2)]
+```
+
+```{r CAR.plot, include=TRUE}
+library(kableExtra)
+  kbl(car.merge) %>%
+  kable_classic_2(full_width = F)
+```
+
+## 7. ¿Com ens podem protegir?
+Per tal de respondre aquesta pregunta, s'ha d'utilitzar el estàndard **Shield**. A patir de les tècniques utilitzades es busca quina tècnica defensiva existeix per poder fer front a l'atac. Per això, es busquen les tècniques defensives que s'utilitzen per protegir-se de tècniques d'atac relacionades amb **Third Party Software( T1078)** i **Valid Accounts (T1072)** a través de la pàgina web: https://shield.mitre.org/attack_mapping/mapping_all.html
+<br>
+```{r SHIELD, include=TRUE}
+shield.relations <- select(shield.relations, from, to)
+shield.relations.filter <- filter(shield.relations,shield.relations$to == "DTE0017" | as.character(shield.relations$to) == "DTE008" | as.character(shield.relations$to) == "DTE0010"| as.character(shield.relations$to) == "DTE0012")
+colnames(shield.relations.filter)[which(names(shield.relations.filter) == "to")] <- "id"
+
+shield.merge<-merge(x=shield.techniques,y=shield.relations.filter,by="id",all.x=TRUE)
+shield.merge <- na.omit(shield.merge)
+```
+<br>
+A continuació, es mostra la següent taula on s'observen en detall les tècniques defensives que s'han trobat juntament amb una descripció sobre com actuar enfront als atacs relacionats amb **Third Party Software( T1078)** i **Valid Accounts (T1072)**:
+<br>
+```{r SHIELD.table, include=TRUE}
+library(kableExtra)
+  kbl(shield.merge) %>%
+  kable_classic_2(full_width = F)
+```
+<br>
+## 8. ¿Què podem fer per prevenir futurs atacs?
+<br>
+
+```{r ATT&CK_mitigations, include=TRUE}
+attck.mitigations<- dplyr::select(attck.mitigations, external_id, name, description)
+attck.techniques.filter4 <- filter(attck.techniques.filter1, startsWith(as.character(attck.techniques.filter1$from), "M")) 
+colnames(attck.mitigations)[which(names(attck.mitigations) == "external_id")] <- "from"
+
+mitigations.merge<-merge(x=attck.mitigations,y=attck.techniques.filter4,by="from",all.x=TRUE)
+mitigations.merge <- na.omit(mitigations.merge)
+```
+A través del dataset *Mitigations* d'ATT$CK es mostra una taula on s'aprecia una descripció del conjunt de tècniques de mitigació tot relacionant-ho amb les dues tècniques d'estudi.
+
+```{r ATT&CK_mitigations.table, include=TRUE}
+library(kableExtra)
+  kbl(mitigations.merge) %>%
+  kable_classic_2(full_width = F)
+```
+## 9. ¿Seria possible predir atacs?
+Seria possible si es realitzés un model de predicció de possibles ciberatacs. Mitjançant aquest model, es podrien processar els esdeveniments de ciberseguretat capturats a través dels sistemes de detecció informàtics per tal de generar una projecció futura de la probabilitat que es consolidi un atac. Tenint aquesta informació, els administradors de sistemes podrien prendre decisions essencials sobre com actuar davant d'imminents atacs informàtics.
+
